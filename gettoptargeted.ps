@@ -1,1 +1,80 @@
+##Functions
+###########
+function Join-String {
+    [CmdletBinding()]
+    Param(
+        [Parameter(Mandatory=$true,ValueFromPipeline=$true)] [string[]]$StringArray, 
+        $Separator=",",
+        [switch]$DoubleQuote=$false
+    )
+    BEGIN{
+        $joinArray = [System.Collections.ArrayList]@()
+    }
+    PROCESS {
+        foreach ($astring in $StringArray) {
+            $joinArray.Add($astring) | Out-Null
+        }
+    }
+    END {
+        $Object = [PSCustomObject]@{}
+        $count = 0;
+        foreach ($aString in $joinArray) {
+            
+            $name = "ieo_$($count)"
+            $Object | Add-Member -MemberType NoteProperty -Name $name -Value $aString;
+            $count = $count + 1;
+        }
+        $ObjectCsv = $Object | ConvertTo-Csv -NoTypeInformation -Delimiter $separator
+        $result = $ObjectCsv[1]
+        if (-not $DoubleQuote) {
+            $result = $result.Replace('","',",").TrimStart('"').TrimEnd('"')
+        }
+        return $result
+    }
+}
 
+#Define Client Variables Here
+#############################
+$ClientID = "YOURCLIENTID"
+$ClientSecret = "YOURCLIENTSECRET"
+$loginURL = "https://login.windows.net/"
+$tenantdomain = "YOURTENANTDOMAIN"
+$resource = "https://graph.microsoft.com"
+ 
+#Construct Auth call to get Access Token 
+#########################################
+$graphBody = @{grant_type="client_credentials";resource=$resource;client_id=$ClientID;client_secret=$ClientSecret}
+$oauth = Invoke-RestMethod -Method Post -Uri $loginURL/$tenantdomain/oauth2/token?api-version=1.0 -Body $graphBody
+$headerParams = @{'Authorization'="$($oauth.token_type) $($oauth.access_token)"}
+
+
+## Get Our Users from Advanced Hunting - sub Phish for Malware etc and tweak parameters to get more results.
+######################################
+Write-Host "Getting Users" -ForegroundColor Green
+$querybody = @"
+{
+    "Query": "EmailEvents | where Timestamp > ago(1d) and ThreatTypes like \"Phish\" | project Timestamp, RecipientEmailAddress | top 10 by Timestamp desc"
+}
+"@
+
+$Response = Invoke-WebRequest https://graph.microsoft.com/v1.0/security/runHuntingQuery -Method 'POST' -Headers $headerParams -Body $querybody -TimeoutSec 120 -ContentType application/json
+$HuntUsers = $Response | ConvertFrom-Json
+
+## Lets parse out the email address
+####################################
+Write-Host "Parsing Users" -ForegroundColor Green
+$validusers = @()
+foreach ( $user in $HuntUsers.results.RecipientEmailAddress | select $_.RecipientEmailAddress)
+{
+  $validusers += $user
+}
+
+## Output some data to UI
+#########################
+Write-Host "Number of users to be found $($validusers.count)" -ForegroundColor Green
+Write-Host "List of Top Targetted Phish" -ForegroundColor Green
+$validusers
+Start-Sleep -Seconds 20
+
+Export to CSV
+$validusers | Export-Csv c:\temp\targets.csv -NoTypeInformation
